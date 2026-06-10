@@ -1,0 +1,17 @@
+global:
+  scrape_interval: 5s # Scrape metrics every 5 seconds
+
+scrape_configs:
+  # Scrape itself just to ensure it's working
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+
+  # Placeholders for when we build your FastAPI app and Worker
+  - job_name: 'fastapi_api'
+    static_configs:
+      - targets: ['api:8000'] # 'api' will be the container name later
+
+  - job_name: 'python_workers'
+    static_configs:
+      - targets: ['worker:8001'] # 'worker' will be the container name later
