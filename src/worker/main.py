@@ -1,25 +1,80 @@
-import os
-import redis
-from src.worker.executor import process_job
+import logging
+import signal
+import sys
 
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+from src.config import settings
+from src.database import SessionLocal
+from src.models import Job, JobStatus
+from src.queue.base import BaseQueue
+from src.queue.memory_queue import MemoryQueue
+from src.queue.redis_queue import RedisQueue
+from src.worker.executor import execute_job
+from src.worker.retry import wait_for_retry
 
-def start_worker():
-    print("Worker started. Listening for jobs on 'job_queue'...")
-    while True:
+# Registering handlers on import
+import src.handlers  # noqa: F401
+
+logger = logging.getLogger(__name__)
+
+shutdown_requested = False
+
+
+def _handle_signal(signum, frame):
+    global shutdown_requested
+    logger.info(f"Received signal {signum}, shutting down gracefully...")
+    shutdown_requested = True
+
+
+def build_queue() -> BaseQueue:
+    if settings.REDIS_URL:
+        logger.info(f"Using Redis queue at {settings.REDIS_URL}")
+        return RedisQueue(settings.REDIS_URL)
+    logger.info("Using in-memory queue (dev mode)")
+    return MemoryQueue()
+
+
+def run_worker():
+    logging.basicConfig(
+        level=settings.LOG_LEVEL,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
+    queue = build_queue()
+    logger.info(f"Worker '{settings.WORKER_ID}' started. Waiting for jobs...")
+
+    while not shutdown_requested:
+        job_id = queue.dequeue(timeout=5)
+        if job_id is None:
+            continue
+
+        db = SessionLocal()
         try:
-            # blpop blocks the loop until a job enters the queue. 
-            # It prevents the worker from maxing out your CPU.
-            result = redis_client.blpop("job_queue", timeout=0)
-            
-            if result:
-                queue_name, job_id = result
-                print(f"\n--- Picked up Job ID: {job_id} ---")
-                process_job(job_id)
-                
+            job = db.query(Job).filter(Job.id == job_id).first()
+            if job is None:
+                logger.warning(f"Job {job_id} not found in database, skipping")
+                continue
+
+            if job.status not in (JobStatus.PENDING, JobStatus.QUEUED, JobStatus.RETRYING):
+                logger.warning(f"Job {job_id} has status {job.status}, skipping")
+                continue
+
+            execute_job(db, job)
+
+            # Re-enqueue if the job needs a retry
+            if job.status == JobStatus.RETRYING:
+                wait_for_retry(job.retries)
+                queue.enqueue(job_id)
+
         except Exception as e:
-            print(f"Worker encountered an error: {e}")
+            logger.exception(f"Unexpected error processing job {job_id}: {e}")
+        finally:
+            db.close()
+
+    logger.info("Worker shut down.")
+
 
 if __name__ == "__main__":
-    start_worker()
+    run_worker()

@@ -1,10 +1,20 @@
-import os
 import redis
+from src.queue.base import BaseQueue
 
-# Connect to the Redis container we spun up earlier
-REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+QUEUE_KEY = "job_engine:jobs"
 
-def enqueue_job(job_id: str):
-    # Pushes the job ID to the right side of a Redis list named 'job_queue'
-    redis_client.rpush("job_queue", job_id)
+
+class RedisQueue(BaseQueue):
+    def __init__(self, redis_url: str):
+        self._client = redis.from_url(redis_url)
+
+    def enqueue(self, job_id: str) -> None:
+        self._client.rpush(QUEUE_KEY, job_id)
+
+    def dequeue(self, timeout: int = 5) -> str | None:
+        # BLPOP blocks until an item is available or timeout is reached
+        result = self._client.blpop(QUEUE_KEY, timeout=timeout)
+        if result is None:
+            return None
+        # result is (key, value) tuple
+        return result[1].decode() if isinstance(result[1], bytes) else result[1]

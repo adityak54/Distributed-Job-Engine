@@ -1,6 +1,6 @@
 import enum
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import Column, String, Integer, DateTime, Enum, JSON, Text
 from sqlalchemy.orm import declarative_base
 
@@ -32,6 +32,6 @@ class Job(Base):
     error_message = Column(Text, nullable=True)
 
     # Observability & Metrics (Crucial for Grafana)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     started_at = Column(DateTime, nullable=True)
     finished_at = Column(DateTime, nullable=True)
