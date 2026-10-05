@@ -63,44 +63,6 @@ services:
       - engine-network
     depends_on:
       - prometheus
-  
-
-  # --- 5. THE API INGESTION LAYER ---
-  api:
-    build:
-      context: .. # Point to the root directory
-      dockerfile: docker/Dockerfile.api
-    container_name: job_engine_api
-    ports:
-      - "8000:8000"
-    environment:
-      # Tell the API how to find the Postgres and Redis containers
-      - DATABASE_URL=postgresql://engine_user:engine_password@postgres:5432/job_engine_db
-      - REDIS_URL=redis://redis:6379/0
-    networks:
-      - engine-network
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
-  # --- 6. THE EXECUTION WORKER ---
-  worker:
-    build:
-      context: ..
-      dockerfile: docker/Dockerfile.worker
-    container_name: job_engine_worker
-    environment:
-      - DATABASE_URL=postgresql://engine_user:engine_password@postgres:5432/job_engine_db
-      - REDIS_URL=redis://redis:6379/0
-    networks:
-      - engine-network
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
 
 volumes:
   postgres_data:
@@ -110,5 +72,3 @@ volumes:
 networks:
   engine-network:
     driver: bridge
-
-  

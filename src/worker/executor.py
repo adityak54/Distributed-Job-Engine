@@ -1,42 +1,48 @@
-from datetime import datetime
-from src.database import SessionLocal
+import logging
+from datetime import datetime, timezone
+from sqlalchemy.orm import Session
 from src.models import Job, JobStatus
-from src.handlers.registry import HANDLER_REGISTRY
+from src.handlers.registry import registry
 
-def process_job(job_id: str):
-    db = SessionLocal()
+logger = logging.getLogger(__name__)
+
+
+def execute_job(db: Session, job: Job) -> None:
+    """Transition job through states: RUNNING → COMPLETED or FAILED/RETRYING/DEAD."""
+    handler = registry.get(job.handler_name)
+
+    # Validate payload before running
+    if not handler.validate(job.payload):
+        job.status = JobStatus.FAILED
+        job.error_message = f"Payload validation failed for handler '{job.handler_name}'"
+        job.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        logger.error(f"Job {job.id}: validation failed")
+        return
+
+    # Mark as RUNNING
+    job.status = JobStatus.RUNNING
+    job.started_at = datetime.now(timezone.utc)
+    db.commit()
+    logger.info(f"Job {job.id}: RUNNING ({job.handler_name})")
+
     try:
-        # 1. Fetch the job from Postgres
-        job = db.query(Job).filter(Job.id == job_id).first()
-        if not job:
-            print(f"Job {job_id} not found in DB.")
-            return
-
-        # 2. Mark as RUNNING
-        job.status = JobStatus.RUNNING
-        job.started_at = datetime.utcnow()
-        db.commit()
-
-        # 3. Find the correct handler
-        handler = HANDLER_REGISTRY.get(job.handler_name)
-        if not handler:
-            raise ValueError(f"No handler registered for '{job.handler_name}'")
-
-        # 4. Execute the work
-        handler.execute(job.payload)
-
-        # 5. Mark as COMPLETED
+        result = handler.execute(job.payload)
         job.status = JobStatus.COMPLETED
-        job.finished_at = datetime.utcnow()
+        job.finished_at = datetime.now(timezone.utc)
         db.commit()
-        print(f"Job {job_id} COMPLETED.")
+        logger.info(f"Job {job.id}: COMPLETED — {result}")
 
     except Exception as e:
-        # Catch errors and mark as FAILED
-        job.status = JobStatus.FAILED
-        job.finished_at = datetime.utcnow()
+        job.retries += 1
         job.error_message = str(e)
-        db.commit()
-        print(f"Job {job_id} FAILED: {str(e)}")
-    finally:
-        db.close()
+
+        if job.retries >= job.max_retries:
+            job.status = JobStatus.DEAD
+            job.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            logger.error(f"Job {job.id}: DEAD after {job.retries} retries — {e}")
+        else:
+            job.status = JobStatus.RETRYING
+            db.commit()
+            logger.warning(f"Job {job.id}: RETRYING ({job.retries}/{job.max_retries}) — {e}")

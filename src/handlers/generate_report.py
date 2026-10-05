@@ -1,15 +1,27 @@
 import time
-from src.handlers.base import BaseJobHandler
+import logging
+from src.handlers.base import JobHandler
 
-class GenerateReportHandler(BaseJobHandler):
-    def execute(self, payload: dict) -> None:
-        user_id = payload.get("user_id")
-        if not user_id:
-            raise ValueError("user_id is required in the payload")
-            
-        print(f"[GenerateReport] Starting report generation for user: {user_id}")
-        
-        # Simulate heavy I/O or CPU work
-        time.sleep(3) 
-        
-        print(f"[GenerateReport] Successfully generated report for user: {user_id}")
+logger = logging.getLogger(__name__)
+
+
+class GenerateReportHandler(JobHandler):
+    name = "generate_report"
+
+    def validate(self, payload: dict) -> bool:
+        return "report_type" in payload
+
+    def execute(self, payload: dict) -> dict:
+        report_type = payload["report_type"]
+        filters = payload.get("filters", {})
+        logger.info(f"Generating '{report_type}' report with filters: {filters}")
+
+        # Simulate report generation work
+        time.sleep(2)
+
+        row_count = 150
+        return {
+            "report_type": report_type,
+            "rows_processed": row_count,
+            "output_file": f"/reports/{report_type}_{int(time.time())}.csv",
+        }
